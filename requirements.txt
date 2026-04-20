@@ -1,0 +1,16 @@
+pandas
+numpy
+scikit-learn
+fastapi
+uvicorn
+pydantic
+httpx
+requests
+python-dotenv
+jupyter
+matplotlib
+seaborn
+tiktoken
+openai
+chromadb
+langchain
