@@ -1,11 +1,19 @@
 from fastapi import FastAPI
 from backend.routers import query
+from backend.utils.retrieval import init_retrieval
+from backend.utils.ml_predictor import init_ml
 import os
 from dotenv import load_dotenv
 
 load_dotenv()
 
 app = FastAPI(title="Decision Intelligence Assistant")
+
+@app.on_event("startup")
+async def startup_event():
+    init_retrieval()
+    init_ml()
+    print("All components initialized.")
 
 app.include_router(query.router)
 

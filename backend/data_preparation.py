@@ -2,8 +2,6 @@ import pandas as pd
 import numpy as np
 import re
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.metrics import classification_report
 import chromadb
 from sentence_transformers import SentenceTransformer
 import os
@@ -37,7 +35,7 @@ def clean_text(text):
 df['clean_text'] = df['text'].apply(clean_text)
 
 # ------------------------------
-# 2. Priority labeling (same as before)
+# 2. Priority labeling (weak supervision)
 # ------------------------------
 urgent_keywords = ['refund', 'broken', 'cancel', 'down', 'help', 'urgent', 'problem', 'issue', 'not working', 'error', 'complaint', 'charge', 'money', 'lost', 'stolen', 'urgently', 'asap', 'immediately', 'emergency', 'critical', 'frustrated', 'angry', 'disappointed']
 
@@ -68,10 +66,6 @@ print(f"Priority distribution:\n{df['priority'].value_counts(normalize=True)}")
 # 3. Chunk text into smaller pieces
 # ------------------------------
 def chunk_text(text, chunk_size=200, overlap=50):
-    """
-    Split text into chunks of approximately `chunk_size` characters,
-    with `overlap` characters between chunks.
-    """
     text = str(text)
     chunks = []
     start = 0
@@ -84,10 +78,9 @@ def chunk_text(text, chunk_size=200, overlap=50):
             break
     return chunks
 
-# Apply chunking to each tweet
 df['chunks'] = df['text'].apply(chunk_text)
 
-# Explode the chunks into separate rows (each chunk becomes a document)
+# Explode chunks into separate rows
 chunked_rows = []
 for idx, row in df.iterrows():
     for chunk_idx, chunk in enumerate(row['chunks']):
@@ -102,7 +95,7 @@ chunk_df = pd.DataFrame(chunked_rows)
 print(f"Total chunks created: {len(chunk_df)}")
 
 # ------------------------------
-# 4. Generate embeddings and store in Chroma (for each chunk)
+# 4. Generate embeddings and store in Chroma
 # ------------------------------
 print("Loading embedding model...")
 embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
@@ -131,7 +124,7 @@ for i in range(0, len(chunk_df), batch_size):
 print("Chroma database populated with chunks.")
 
 # ------------------------------
-# 5. ML baseline (still on original tweets, using whole text features)
+# 5. Prepare tabular dataset for ML baseline
 # ------------------------------
 def extract_features(text):
     text = str(text)
@@ -149,21 +142,8 @@ def extract_features(text):
 feature_df = df['text'].apply(extract_features).apply(pd.Series)
 feature_df['priority'] = df['priority']
 
-X = feature_df.drop('priority', axis=1)
-y = feature_df['priority']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-
-clf = RandomForestClassifier(n_estimators=100, random_state=42)
-clf.fit(X_train, y_train)
-y_pred = clf.predict(X_test)
-print("\nML Baseline Performance (Random Forest):")
-print(classification_report(y_test, y_pred))
-
-os.makedirs('backend/models', exist_ok=True)
-with open('backend/models/ml_model.pkl', 'wb') as f:
-    pickle.dump(clf, f)
-with open('backend/models/feature_columns.pkl', 'wb') as f:
-    pickle.dump(X.columns.tolist(), f)
-
-print("ML model saved to backend/models/ml_model.pkl")
-print("Data preparation complete (with chunking).")
+# Save feature dataset for later model training
+os.makedirs('data', exist_ok=True)
+feature_df.to_csv('data/features.csv', index=False)
+print("Feature dataset saved to data/features.csv")
+print("Data preparation complete. Run 'python backend/train_models.py' to train and compare models.")
