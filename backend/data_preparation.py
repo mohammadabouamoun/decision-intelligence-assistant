@@ -1,26 +1,55 @@
 import pandas as pd
 import numpy as np
 import re
-from sklearn.model_selection import train_test_split
-import chromadb
+import random
 from sentence_transformers import SentenceTransformer
+import chromadb
 import os
-import pickle
 
 # ------------------------------
-# 0. Sample size (adjust as needed)
+# 0. Parameters
 # ------------------------------
-SAMPLE_SIZE = 5000   # Smaller for faster chunking
+SAMPLE_SIZE = 50000           # Number of inbound tweets to sample
+CHUNK_SIZE = 500              # Large enough to fit whole tweet (max 280 chars)
+OVERLAP = 0                   # No overlap needed
+RANDOM_STATE = 42
+
+def reservoir_sample_csv(file_path, sample_size, inbound_only=True, random_state=42):
+    """
+    Reservoir sampling from a CSV, reading in chunks.
+    Optionally filter by inbound column (assumed to be boolean/0/1).
+    """
+    random.seed(random_state)
+    sample = []
+    total_processed = 0
+    
+    # Determine if inbound column exists by reading first chunk
+    first_chunk = next(pd.read_csv(file_path, chunksize=1))
+    has_inbound = 'inbound' in first_chunk.columns
+    
+    for chunk in pd.read_csv(file_path, chunksize=10000):
+        if inbound_only and has_inbound:
+            chunk = chunk[chunk['inbound'] == True]
+        if chunk.empty:
+            continue
+        for _, row in chunk.iterrows():
+            total_processed += 1
+            if len(sample) < sample_size:
+                sample.append(row)
+            else:
+                j = random.randint(0, total_processed - 1)
+                if j < sample_size:
+                    sample[j] = row
+    if sample:
+        return pd.DataFrame(sample)
+    else:
+        return pd.DataFrame()
 
 # ------------------------------
-# 1. Load and clean data (sample)
+# 1. Load and sample (memory efficient)
 # ------------------------------
-print("Loading data...")
-df = pd.read_csv('data/twcs/twcs.csv')
-print(f"Original shape: {df.shape}")
-
-if len(df) > SAMPLE_SIZE:
-    df = df.sample(n=SAMPLE_SIZE, random_state=42)
+print("Loading data using reservoir sampling (inbound only)...")
+df = reservoir_sample_csv('data/twcs/twcs.csv', SAMPLE_SIZE, inbound_only=True, random_state=RANDOM_STATE)
 print(f"Sampled shape: {df.shape}")
 
 df = df.dropna(subset=['text'])
@@ -37,7 +66,10 @@ df['clean_text'] = df['text'].apply(clean_text)
 # ------------------------------
 # 2. Priority labeling (weak supervision)
 # ------------------------------
-urgent_keywords = ['refund', 'broken', 'cancel', 'down', 'help', 'urgent', 'problem', 'issue', 'not working', 'error', 'complaint', 'charge', 'money', 'lost', 'stolen', 'urgently', 'asap', 'immediately', 'emergency', 'critical', 'frustrated', 'angry', 'disappointed']
+urgent_keywords = ['refund', 'broken', 'cancel', 'down', 'help', 'urgent', 'problem', 'issue', 
+                   'not working', 'error', 'complaint', 'charge', 'money', 'lost', 'stolen', 
+                   'urgently', 'asap', 'immediately', 'emergency', 'critical', 'frustrated', 
+                   'angry', 'disappointed']
 
 def has_exclamation(text):
     return text.count('!') >= 2
@@ -63,10 +95,13 @@ df['priority'] = df.apply(is_urgent, axis=1)
 print(f"Priority distribution:\n{df['priority'].value_counts(normalize=True)}")
 
 # ------------------------------
-# 3. Chunk text into smaller pieces
+# 3. Chunk text (one chunk per tweet, since CHUNK_SIZE > tweet length)
 # ------------------------------
-def chunk_text(text, chunk_size=200, overlap=50):
+def chunk_text(text, chunk_size=CHUNK_SIZE, overlap=OVERLAP):
     text = str(text)
+    # If text is short, just return it as a single chunk
+    if len(text) <= chunk_size:
+        return [text]
     chunks = []
     start = 0
     while start < len(text):
@@ -92,7 +127,7 @@ for idx, row in df.iterrows():
         })
 
 chunk_df = pd.DataFrame(chunked_rows)
-print(f"Total chunks created: {len(chunk_df)}")
+print(f"Total chunks created: {len(chunk_df)} (should equal number of tweets)")
 
 # ------------------------------
 # 4. Generate embeddings and store in Chroma
@@ -142,7 +177,6 @@ def extract_features(text):
 feature_df = df['text'].apply(extract_features).apply(pd.Series)
 feature_df['priority'] = df['priority']
 
-# Save feature dataset for later model training
 os.makedirs('data', exist_ok=True)
 feature_df.to_csv('data/features.csv', index=False)
 print("Feature dataset saved to data/features.csv")
